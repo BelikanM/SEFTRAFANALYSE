@@ -13,6 +13,7 @@ import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader";
 import * as THREE from "three";
 import "./App.css";
 
+// Textures prédéfinies
 const presetTextures = [
   { name: "Terre sèche", url: "https://cdn.polyhaven.com/asset_img/primary/dry_ground/preview.jpg" },
   { name: "Sol forestier", url: "https://cdn.polyhaven.com/asset_img/primary/forest_ground_01/preview.jpg" },
@@ -20,6 +21,7 @@ const presetTextures = [
   { name: "Gravier", url: "https://cdn.polyhaven.com/asset_img/primary/rock_ground/preview.jpg" },
 ];
 
+// Composant de chargement
 function Loader() {
   const { progress } = useProgress();
   return (
@@ -29,6 +31,7 @@ function Loader() {
   );
 }
 
+// Composant pour charger et afficher un modèle 3D
 function LoadModel({ file, material, textureURL, onClickPin, color, setSelectedObject }) {
   const [object, setObject] = useState(null);
 
@@ -70,7 +73,7 @@ function LoadModel({ file, material, textureURL, onClickPin, color, setSelectedO
         const loader = new PLYLoader();
         const geometry = loader.parse(reader.result);
         geometry.computeVertexNormals();
-        const pointsMaterial = new THREE.PointsMaterial({ size: 0.01, color: color });
+        const pointsMaterial = new THREE.PointsMaterial({ size: 0.01, color });
         const points = new THREE.Points(geometry, pointsMaterial);
         setObject(points);
       } else if (ext === "las") {
@@ -140,6 +143,7 @@ function LoadModel({ file, material, textureURL, onClickPin, color, setSelectedO
   ) : null;
 }
 
+// Composant pour les contrôles de transformation
 function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) {
   const [mode, setMode] = useState("translate");
   const [snap, setSnap] = useState(false);
@@ -160,7 +164,7 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
           rotation: object.rotation.clone(),
           scale: object.scale.clone(),
         };
-        setHistory((prev) => [...prev, newState].slice(-50)); // Limit history to 50 steps
+        setHistory((prev) => [...prev, newState].slice(-50));
         setRedoStack([]);
       });
     }
@@ -196,11 +200,13 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
     if (type === "position") object.position[axis] = numValue;
     if (type === "rotation") object.rotation[axis] = THREE.MathUtils.degToRad(numValue);
     if (type === "scale") object.scale[axis] = numValue;
-    const newState = {
-      position: object.position.clone(),
-      rotation: object.rotation.clone(),
-      scale: object.scale.clone(),
-    };
+    const newState = object
+      ? {
+          position: object.position.clone(),
+          rotation: object.rotation.clone(),
+          scale: object.scale.clone(),
+        }
+      : {};
     setHistory((prev) => [...prev, newState].slice(-50));
     setRedoStack([]);
   };
@@ -217,7 +223,6 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
         setPanelPosition((prev) => {
           const newX = prev.x + e.movementX;
           const newY = prev.y + e.movementY;
-          // Limites pour empêcher le panneau de sortir de l'écran
           const maxX = window.innerWidth - (panelRef.current?.offsetWidth || 300);
           const maxY = window.innerHeight - (panelRef.current?.offsetHeight || 200);
           return {
@@ -233,28 +238,32 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
     setIsDragging(false);
   };
 
-  // Actions de caméra
+  // Contrôles de la caméra
   const rotateLeft = () => {
     if (orbitControlsRef.current) {
-      orbitControlsRef.current.azimuthAngle -= THREE.MathUtils.degToRad(15);
+      orbitControlsRef.current.object.rotateY(THREE.MathUtils.degToRad(15));
+      orbitControlsRef.current.update();
     }
   };
 
   const rotateRight = () => {
     if (orbitControlsRef.current) {
-      orbitControlsRef.current.azimuthAngle += THREE.MathUtils.degToRad(15);
+      orbitControlsRef.current.object.rotateY(THREE.MathUtils.degToRad(-15));
+      orbitControlsRef.current.update();
     }
   };
 
   const rotateUp = () => {
     if (orbitControlsRef.current) {
-      orbitControlsRef.current.polarAngle -= THREE.MathUtils.degToRad(15);
+      orbitControlsRef.current.object.rotateX(THREE.MathUtils.degToRad(15));
+      orbitControlsRef.current.update();
     }
   };
 
   const rotateDown = () => {
     if (orbitControlsRef.current) {
-      orbitControlsRef.current.polarAngle += THREE.MathUtils.degToRad(15);
+      orbitControlsRef.current.object.rotateX(THREE.MathUtils.degToRad(-15));
+      orbitControlsRef.current.update();
     }
   };
 
@@ -264,6 +273,7 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
         orbitControlsRef.current.target,
         0.1
       );
+      orbitControlsRef.current.update();
     }
   };
 
@@ -273,6 +283,7 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
         orbitControlsRef.current.target,
         -0.1
       );
+      orbitControlsRef.current.update();
     }
   };
 
@@ -282,24 +293,24 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
     }
   };
 
-  if (!object) return null;
-
   return (
     <>
-      <TransformControls
-        ref={controlsRef}
-        object={object}
-        mode={mode}
-        space="local"
-        size={isFullscreen ? 1.2 : 0.8}
-        showX={true}
-        showY={true}
-        showZ={true}
-        snapping={snap}
-        translationSnap={snap ? 0.1 : null}
-        rotationSnap={snap ? THREE.MathUtils.degToRad(5) : null}
-        scaleSnap={snap ? 0.1 : null}
-      />
+      {object && (
+        <TransformControls
+          ref={controlsRef}
+          object={object}
+          mode={mode}
+          space="local"
+          size={isFullscreen ? 1.2 : 0.8}
+          showX={true}
+          showY={true}
+          showZ={true}
+          snapping={snap}
+          translationSnap={snap ? 0.1 : null}
+          rotationSnap={snap ? THREE.MathUtils.degToRad(5) : null}
+          scaleSnap={snap ? 0.1 : null}
+        />
+      )}
       {isPanelVisible && (
         <Html
           prepend
@@ -373,15 +384,15 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
               </button>
               <button
                 className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
-                onClick={rotateUp}
-              >
-                🔄 Haut
-              </button>
-              <button
-                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
                 onClick={rotateDown}
               >
                 🔄 Bas
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={rotateUp}
+              >
+                🔄 Haut
               </button>
               <button
                 className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
@@ -418,80 +429,82 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
                 Redo
               </button>
             </div>
-            <div className="flex flex-col gap-1">
-              <div>
-                <span>Position:</span>
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={object.position.x.toFixed(2)}
-                  onChange={(e) => handleInputChange("position", "x", e.target.value)}
-                  step="0.1"
-                />
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={object.position.y.toFixed(2)}
-                  onChange={(e) => handleInputChange("position", "y", e.target.value)}
-                  step="0.1"
-                />
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={object.position.z.toFixed(2)}
-                  onChange={(e) => handleInputChange("position", "z", e.target.value)}
-                  step="0.1"
-                />
+            {object && (
+              <div className="flex flex-col gap-1">
+                <div>
+                  <span>Position:</span>
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={object.position.x.toFixed(2)}
+                    onChange={(e) => handleInputChange("position", "x", e.target.value)}
+                    step="0.1"
+                  />
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={object.position.y.toFixed(2)}
+                    onChange={(e) => handleInputChange("position", "y", e.target.value)}
+                    step="0.1"
+                  />
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={object.position.z.toFixed(2)}
+                    onChange={(e) => handleInputChange("position", "z", e.target.value)}
+                    step="0.1"
+                  />
+                </div>
+                <div>
+                  <span>Rotation:</span>
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={THREE.MathUtils.radToDeg(object.rotation.x).toFixed(2)}
+                    onChange={(e) => handleInputChange("rotation", "x", e.target.value)}
+                    step="5"
+                  />
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={THREE.MathUtils.radToDeg(object.rotation.y).toFixed(2)}
+                    onChange={(e) => handleInputChange("rotation", "y", e.target.value)}
+                    step="5"
+                  />
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={THREE.MathUtils.radToDeg(object.rotation.z).toFixed(2)}
+                    onChange={(e) => handleInputChange("rotation", "z", e.target.value)}
+                    step="5"
+                  />
+                </div>
+                <div>
+                  <span>Scale:</span>
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={object.scale.x.toFixed(2)}
+                    onChange={(e) => handleInputChange("scale", "x", e.target.value)}
+                    step="0.1"
+                  />
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={object.scale.y.toFixed(2)}
+                    onChange={(e) => handleInputChange("scale", "y", e.target.value)}
+                    step="0.1"
+                  />
+                  <input
+                    type="number"
+                    className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                    value={object.scale.z.toFixed(2)}
+                    onChange={(e) => handleInputChange("scale", "z", e.target.value)}
+                    step="0.1"
+                  />
+                </div>
               </div>
-              <div>
-                <span>Rotation:</span>
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={THREE.MathUtils.radToDeg(object.rotation.x).toFixed(2)}
-                  onChange={(e) => handleInputChange("rotation", "x", e.target.value)}
-                  step="5"
-                />
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={THREE.MathUtils.radToDeg(object.rotation.y).toFixed(2)}
-                  onChange={(e) => handleInputChange("rotation", "y", e.target.value)}
-                  step="5"
-                />
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={THREE.MathUtils.radToDeg(object.rotation.z).toFixed(2)}
-                  onChange={(e) => handleInputChange("rotation", "z", e.target.value)}
-                  step="5"
-                />
-              </div>
-              <div>
-                <span>Scale:</span>
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={object.scale.x.toFixed(2)}
-                  onChange={(e) => handleInputChange("scale", "x", e.target.value)}
-                  step="0.1"
-                />
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={object.scale.y.toFixed(2)}
-                  onChange={(e) => handleInputChange("scale", "y", e.target.value)}
-                  step="0.1"
-                />
-                <input
-                  type="number"
-                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
-                  value={object.scale.z.toFixed(2)}
-                  onChange={(e) => handleInputChange("scale", "z", e.target.value)}
-                  step="0.1"
-                />
-              </div>
-            </div>
+            )}
           </div>
         </Html>
       )}
@@ -516,7 +529,7 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
             className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
             onClick={() => setIsPanelVisible(true)}
           >
-            Show Panel
+            Afficher le panneau
           </button>
         </Html>
       )}
@@ -524,6 +537,7 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
   );
 }
 
+// Composant pour afficher une carte de modèle
 function ModelCard({ file, material, textureURL, onClickPin, color }) {
   const containerRef = useRef(null);
   const orbitControlsRef = useRef();
@@ -671,6 +685,7 @@ function ModelCard({ file, material, textureURL, onClickPin, color }) {
   );
 }
 
+// Composant principal
 export default function App() {
   const inputRef = useRef();
   const [files, setFiles] = useState([]);
