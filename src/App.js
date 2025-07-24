@@ -1,11 +1,11 @@
-// App.js
 import React, { useRef, useState, Suspense, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
 import {
   OrbitControls,
   Environment,
   Html,
-  useProgress
+  useProgress,
+  TransformControls,
 } from "@react-three/drei";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
@@ -29,7 +29,7 @@ function Loader() {
   );
 }
 
-function LoadModel({ file, material, textureURL, onClickPin, color }) {
+function LoadModel({ file, material, textureURL, onClickPin, color, setSelectedObject }) {
   const [object, setObject] = useState(null);
 
   useEffect(() => {
@@ -127,6 +127,7 @@ function LoadModel({ file, material, textureURL, onClickPin, color }) {
     event.stopPropagation();
     const point = event.point;
     onClickPin(file.name, point);
+    setSelectedObject(object);
   }
 
   return object ? (
@@ -139,11 +140,397 @@ function LoadModel({ file, material, textureURL, onClickPin, color }) {
   ) : null;
 }
 
+function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) {
+  const [mode, setMode] = useState("translate");
+  const [snap, setSnap] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
+  const controlsRef = useRef();
+  const panelRef = useRef();
+  const [panelPosition, setPanelPosition] = useState({ x: 10, y: isFullscreen ? 80 : 40 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [isPanelVisible, setIsPanelVisible] = useState(true);
+
+  useEffect(() => {
+    if (object && controlsRef.current) {
+      const controls = controlsRef.current;
+      controls.addEventListener("change", () => {
+        const newState = {
+          position: object.position.clone(),
+          rotation: object.rotation.clone(),
+          scale: object.scale.clone(),
+        };
+        setHistory((prev) => [...prev, newState].slice(-50)); // Limit history to 50 steps
+        setRedoStack([]);
+      });
+    }
+  }, [object]);
+
+  const undo = () => {
+    if (history.length <= 1) return;
+    const lastState = history[history.length - 2];
+    setRedoStack((prev) => [...prev, history[history.length - 1]]);
+    setHistory((prev) => prev.slice(0, -1));
+    if (lastState && object) {
+      object.position.copy(lastState.position);
+      object.rotation.copy(lastState.rotation);
+      object.scale.copy(lastState.scale);
+    }
+  };
+
+  const redo = () => {
+    if (redoStack.length === 0) return;
+    const nextState = redoStack[redoStack.length - 1];
+    setHistory((prev) => [...prev, nextState]);
+    setRedoStack((prev) => prev.slice(0, -1));
+    if (nextState && object) {
+      object.position.copy(nextState.position);
+      object.rotation.copy(nextState.rotation);
+      object.scale.copy(nextState.scale);
+    }
+  };
+
+  const handleInputChange = (type, axis, value) => {
+    if (!object) return;
+    const numValue = parseFloat(value) || 0;
+    if (type === "position") object.position[axis] = numValue;
+    if (type === "rotation") object.rotation[axis] = THREE.MathUtils.degToRad(numValue);
+    if (type === "scale") object.scale[axis] = numValue;
+    const newState = {
+      position: object.position.clone(),
+      rotation: object.rotation.clone(),
+      scale: object.scale.clone(),
+    };
+    setHistory((prev) => [...prev, newState].slice(-50));
+    setRedoStack([]);
+  };
+
+  const handleMouseDown = (e) => {
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleMouseMove = (e) => {
+    if (isDragging) {
+      e.stopPropagation();
+      requestAnimationFrame(() => {
+        setPanelPosition((prev) => {
+          const newX = prev.x + e.movementX;
+          const newY = prev.y + e.movementY;
+          // Limites pour empêcher le panneau de sortir de l'écran
+          const maxX = window.innerWidth - (panelRef.current?.offsetWidth || 300);
+          const maxY = window.innerHeight - (panelRef.current?.offsetHeight || 200);
+          return {
+            x: Math.max(0, Math.min(newX, maxX)),
+            y: Math.max(0, Math.min(newY, maxY)),
+          };
+        });
+      });
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  // Actions de caméra
+  const rotateLeft = () => {
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.azimuthAngle -= THREE.MathUtils.degToRad(15);
+    }
+  };
+
+  const rotateRight = () => {
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.azimuthAngle += THREE.MathUtils.degToRad(15);
+    }
+  };
+
+  const rotateUp = () => {
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.polarAngle -= THREE.MathUtils.degToRad(15);
+    }
+  };
+
+  const rotateDown = () => {
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.polarAngle += THREE.MathUtils.degToRad(15);
+    }
+  };
+
+  const zoomIn = () => {
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.object.position.lerp(
+        orbitControlsRef.current.target,
+        0.1
+      );
+    }
+  };
+
+  const zoomOut = () => {
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.object.position.lerp(
+        orbitControlsRef.current.target,
+        -0.1
+      );
+    }
+  };
+
+  const resetCamera = () => {
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.reset();
+    }
+  };
+
+  if (!object) return null;
+
+  return (
+    <>
+      <TransformControls
+        ref={controlsRef}
+        object={object}
+        mode={mode}
+        space="local"
+        size={isFullscreen ? 1.2 : 0.8}
+        showX={true}
+        showY={true}
+        showZ={true}
+        snapping={snap}
+        translationSnap={snap ? 0.1 : null}
+        rotationSnap={snap ? THREE.MathUtils.degToRad(5) : null}
+        scaleSnap={snap ? 0.1 : null}
+      />
+      {isPanelVisible && (
+        <Html
+          prepend
+          style={{
+            position: "absolute",
+            top: `${panelPosition.y}px`,
+            left: `${panelPosition.x}px`,
+            zIndex: 10001,
+            color: "white",
+            background: "rgba(0, 0, 0, 0.8)",
+            padding: "10px",
+            borderRadius: "8px",
+            fontSize: "12px",
+            userSelect: "none",
+            cursor: isDragging ? "grabbing" : "grab",
+            transition: "top 0.1s, left 0.1s",
+          }}
+        >
+          <div
+            ref={panelRef}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            className="flex flex-col gap-2"
+          >
+            <div className="flex gap-2 flex-wrap">
+              <button
+                className={`px-2 py-1 rounded ${mode === "translate" ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
+                onClick={() => setMode("translate")}
+              >
+                Move (G)
+              </button>
+              <button
+                className={`px-2 py-1 rounded ${mode === "rotate" ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
+                onClick={() => setMode("rotate")}
+              >
+                Rotate (R)
+              </button>
+              <button
+                className={`px-2 py-1 rounded ${mode === "scale" ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
+                onClick={() => setMode("scale")}
+              >
+                Scale (S)
+              </button>
+              <button
+                className={`px-2 py-1 rounded ${snap ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
+                onClick={() => setSnap(!snap)}
+              >
+                Snap {snap ? "On" : "Off"}
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={() => setIsPanelVisible(false)}
+              >
+                Hide
+              </button>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={rotateLeft}
+              >
+                🔄 Gauche
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={rotateRight}
+              >
+                🔄 Droite
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={rotateUp}
+              >
+                🔄 Haut
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={rotateDown}
+              >
+                🔄 Bas
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={zoomIn}
+              >
+                🔎 Zoom +
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={zoomOut}
+              >
+                🔎 Zoom -
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={resetCamera}
+              >
+                🔄 Réinitialiser
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={undo}
+                disabled={history.length <= 1}
+              >
+                Undo
+              </button>
+              <button
+                className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+                onClick={redo}
+                disabled={redoStack.length === 0}
+              >
+                Redo
+              </button>
+            </div>
+            <div className="flex flex-col gap-1">
+              <div>
+                <span>Position:</span>
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={object.position.x.toFixed(2)}
+                  onChange={(e) => handleInputChange("position", "x", e.target.value)}
+                  step="0.1"
+                />
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={object.position.y.toFixed(2)}
+                  onChange={(e) => handleInputChange("position", "y", e.target.value)}
+                  step="0.1"
+                />
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={object.position.z.toFixed(2)}
+                  onChange={(e) => handleInputChange("position", "z", e.target.value)}
+                  step="0.1"
+                />
+              </div>
+              <div>
+                <span>Rotation:</span>
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={THREE.MathUtils.radToDeg(object.rotation.x).toFixed(2)}
+                  onChange={(e) => handleInputChange("rotation", "x", e.target.value)}
+                  step="5"
+                />
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={THREE.MathUtils.radToDeg(object.rotation.y).toFixed(2)}
+                  onChange={(e) => handleInputChange("rotation", "y", e.target.value)}
+                  step="5"
+                />
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={THREE.MathUtils.radToDeg(object.rotation.z).toFixed(2)}
+                  onChange={(e) => handleInputChange("rotation", "z", e.target.value)}
+                  step="5"
+                />
+              </div>
+              <div>
+                <span>Scale:</span>
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={object.scale.x.toFixed(2)}
+                  onChange={(e) => handleInputChange("scale", "x", e.target.value)}
+                  step="0.1"
+                />
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={object.scale.y.toFixed(2)}
+                  onChange={(e) => handleInputChange("scale", "y", e.target.value)}
+                  step="0.1"
+                />
+                <input
+                  type="number"
+                  className="w-16 mx-1 p-1 bg-gray-800 text-white rounded"
+                  value={object.scale.z.toFixed(2)}
+                  onChange={(e) => handleInputChange("scale", "z", e.target.value)}
+                  step="0.1"
+                />
+              </div>
+            </div>
+          </div>
+        </Html>
+      )}
+      {!isPanelVisible && (
+        <Html
+          prepend
+          style={{
+            position: "absolute",
+            top: `${panelPosition.y}px`,
+            left: `${panelPosition.x}px`,
+            zIndex: 10001,
+            color: "white",
+            background: "rgba(0, 0, 0, 0.8)",
+            padding: "10px",
+            borderRadius: "8px",
+            fontSize: "12px",
+            userSelect: "none",
+            transition: "top 0.1s, left 0.1s",
+          }}
+        >
+          <button
+            className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
+            onClick={() => setIsPanelVisible(true)}
+          >
+            Show Panel
+          </button>
+        </Html>
+      )}
+    </>
+  );
+}
+
 function ModelCard({ file, material, textureURL, onClickPin, color }) {
   const containerRef = useRef(null);
+  const orbitControlsRef = useRef();
   const [bgColor, setBgColor] = useState("#222");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [localColor, setLocalColor] = useState(color);
+  const [selectedObject, setSelectedObject] = useState(null);
 
   useEffect(() => {
     function fullscreenChange() {
@@ -199,7 +586,7 @@ function ModelCard({ file, material, textureURL, onClickPin, color }) {
           position: "absolute",
           top: 10,
           right: 10,
-          zIndex: 10000,
+          zIndex: 10002,
           backgroundColor: "#8e44ad",
           color: "white",
           border: "none",
@@ -218,7 +605,7 @@ function ModelCard({ file, material, textureURL, onClickPin, color }) {
             position: "absolute",
             top: 10,
             left: 10,
-            zIndex: 10000,
+            zIndex: 10002,
             color: "#fff",
             fontSize: "12px",
             display: "flex",
@@ -248,7 +635,7 @@ function ModelCard({ file, material, textureURL, onClickPin, color }) {
         <ambientLight intensity={0.5} />
         <directionalLight position={[5, 10, 5]} intensity={1} castShadow />
         <Environment preset="city" />
-        <OrbitControls enableZoom enablePan />
+        <OrbitControls ref={orbitControlsRef} enableZoom enablePan />
         <Suspense fallback={<Loader />}>
           <LoadModel
             file={file}
@@ -256,6 +643,12 @@ function ModelCard({ file, material, textureURL, onClickPin, color }) {
             textureURL={textureURL}
             onClickPin={onClickPin}
             color={localColor}
+            setSelectedObject={setSelectedObject}
+          />
+          <TransformControlsComponent
+            object={selectedObject}
+            isFullscreen={isFullscreen}
+            orbitControlsRef={orbitControlsRef}
           />
         </Suspense>
       </Canvas>
@@ -303,7 +696,9 @@ export default function App() {
   return (
     <div className={`app-container ${darkMode ? "dark" : ""}`}>
       <div className="toolbar">
-        <button onClick={() => inputRef.current.click()}>📦 Importer jusqu’à 10 fichiers 3D</button>
+        <button onClick={() => inputRef.current.click()}>
+          📦 Importer jusqu’à 10 fichiers 3D
+        </button>
         <label>
           🎨 Couleur :
           <input
