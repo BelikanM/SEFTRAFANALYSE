@@ -1,5 +1,5 @@
 import React, { useRef, useState, Suspense, useEffect } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import {
   OrbitControls,
   Environment,
@@ -12,6 +12,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader";
 import * as THREE from "three";
 import "./App.css";
+import DrawingTools from "./DrawingTools";
 
 // Textures prédéfinies
 const presetTextures = [
@@ -31,9 +32,39 @@ function Loader() {
   );
 }
 
+// Composant pour les lignes tracées
+function DrawnLines({ points, color, width, length, type }) {
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({ color, linewidth: width });
+  const midPoint = points[Math.floor(points.length / 2)];
+
+  return (
+    <>
+      <line geometry={geometry} material={material} />
+      {length && midPoint && (
+        <Html position={midPoint}>
+          <div style={{ background: "rgba(0, 0, 0, 0.7)", color: "white", padding: "2px 5px", borderRadius: "3px", fontSize: "10px" }}>
+            {type === "circle" ? "Circonférence" : type === "square" ? "Périmètre" : "Longueur"}:
+            <br />{length.toFixed(2)} m
+            <br />{(length * 100).toFixed(2)} cm
+            <br />{(length * 1000).toFixed(2)} mm
+            <br />{(length / 1000).toFixed(5)} km
+          </div>
+        </Html>
+      )}
+    </>
+  );
+}
+
 // Composant pour charger et afficher un modèle 3D
-function LoadModel({ file, material, textureURL, onClickPin, color, interiorColor, setSelectedObject }) {
+function LoadModel({ file, material, textureURL, onClickPin, color, interiorColor, setSelectedObject, onDraw, drawMode, drawType, lineColor, lineWidth }) {
   const [object, setObject] = useState(null);
+  const { scene, camera, gl } = useThree();
+  const raycaster = useRef(new THREE.Raycaster());
+  const mouse = useRef(new THREE.Vector2());
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [currentPoints, setCurrentPoints] = useState([]);
+  const [lines, setLines] = useState([]);
 
   useEffect(() => {
     const ext = file.name.split(".").pop().toLowerCase();
@@ -51,7 +82,7 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
 
     const interiorMaterial = new THREE.MeshStandardMaterial({
       color: interiorColor,
-      side: THREE.BackSide, // Rendu des faces internes
+      side: THREE.BackSide,
     });
 
     reader.onload = () => {
@@ -153,25 +184,137 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
     }
   }, [file, material, textureURL, color, interiorColor]);
 
+  const updateMousePosition = (event) => {
+    const rect = gl.domElement.getBoundingClientRect();
+    mouse.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  };
+
+  const getIntersects = () => {
+    raycaster.current.setFromCamera(mouse.current, camera);
+    return raycaster.current.intersectObject(object, true);
+  };
+
+  const handleMouseDown = (event) => {
+    if (!object || !drawMode) return;
+    setIsDrawing(true);
+    updateMousePosition(event);
+    const intersects = getIntersects();
+    if (intersects.length > 0) {
+      const point = intersects[0].point;
+      setCurrentPoints([point]);
+    }
+  };
+
+  const handleMouseMove = (event) => {
+    if (!isDrawing || !object || !drawMode) return;
+    updateMousePosition(event);
+    const intersects = getIntersects();
+    if (intersects.length > 0) {
+      const point = intersects[0].point;
+      setCurrentPoints((prev) => {
+        if (prev.length === 0) return [point];
+        const lastPoint = prev[prev.length - 1];
+        // Ajouter un point seulement si la distance est supérieure à 0.01 (précision)
+        if (point.distanceTo(lastPoint) > 0.01) {
+          if (drawType === "straight" && prev.length === 1) {
+            return [prev[0], point];
+          } else if (drawType === "free") {
+            return [...prev, point];
+          } else if (drawType === "circle" || drawType === "square") {
+            return [prev[0], point];
+          }
+        }
+        return prev;
+      });
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (isDrawing && currentPoints.length > 1) {
+      let finalPoints = currentPoints;
+      if (drawType === "circle") {
+        finalPoints = createCirclePoints(currentPoints[0], currentPoints[1]);
+      } else if (drawType === "square") {
+        finalPoints = createSquarePoints(currentPoints[0], currentPoints[1]);
+      }
+      const length = calculateLength(finalPoints);
+      setLines((prev) => [...prev, { points: finalPoints, length, type: drawType }]);
+      onDraw({ points: finalPoints, length, type: drawType });
+    }
+    setIsDrawing(false);
+    setCurrentPoints([]);
+  };
+
+  const createCirclePoints = (center, edge) => {
+    const radius = center.distanceTo(edge);
+    const points = [];
+    const segments = 64;
+    for (let i = 0; i <= segments; i++) {
+      const theta = (i / segments) * Math.PI * 2;
+      const x = center.x + radius * Math.cos(theta);
+      const y = center.y + radius * Math.sin(theta);
+      const z = center.z;
+      points.push(new THREE.Vector3(x, y, z));
+    }
+    return points;
+  };
+
+  const createSquarePoints = (start, end) => {
+    const width = Math.abs(end.x - start.x);
+    const height = Math.abs(end.y - start.y);
+    const size = Math.max(width, height);
+    const points = [
+      start,
+      new THREE.Vector3(start.x + size, start.y, start.z),
+      new THREE.Vector3(start.x + size, start.y + size, start.z),
+      new THREE.Vector3(start.x, start.y + size, start.z),
+      start,
+    ];
+    return points;
+  };
+
+  const calculateLength = (points) => {
+    let length = 0;
+    for (let i = 1; i < points.length; i++) {
+      length += points[i].distanceTo(points[i - 1]);
+    }
+    return length;
+  };
+
   function handleClick(event) {
+    if (drawMode) return;
     event.stopPropagation();
     const point = event.point;
     onClickPin(file.name, point);
     setSelectedObject(object);
   }
 
-  return object ? (
-    <primitive
-      object={object}
-      scale={1.5}
-      onClick={handleClick}
-      dispose={null}
-    />
-  ) : null;
+  return (
+    <>
+      {object && (
+        <primitive
+          object={object}
+          scale={1.5}
+          onClick={handleClick}
+          onPointerDown={drawMode ? handleMouseDown : undefined}
+          onPointerMove={drawMode ? handleMouseMove : undefined}
+          onPointerUp={drawMode ? handleMouseUp : undefined}
+          dispose={null}
+        />
+      )}
+      {lines.map((line, index) => (
+        <DrawnLines key={index} points={line.points} color={lineColor} width={lineWidth} length={line.length} type={line.type} />
+      ))}
+      {currentPoints.length > 0 && (
+        <DrawnLines points={currentPoints} color={lineColor} width={lineWidth} length={calculateLength(currentPoints)} type={drawType} />
+      )}
+    </>
+  );
 }
 
 // Composant pour les contrôles de transformation
-function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) {
+function TransformControlsComponent({ object, isFullscreen, orbitControlsRef, setDrawMode, drawType, setDrawType, lineColor, setLineColor, lineWidth, setLineWidth }) {
   const [mode, setMode] = useState("translate");
   const [snap, setSnap] = useState(false);
   const [history, setHistory] = useState([]);
@@ -265,7 +408,6 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
     setIsDragging(false);
   };
 
-  // Contrôles de la caméra
   const rotateLeft = () => {
     if (orbitControlsRef.current) {
       orbitControlsRef.current.object.rotateY(THREE.MathUtils.degToRad(15));
@@ -322,7 +464,7 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
 
   return (
     <>
-      {object && (
+      {object && mode !== "draw" && (
         <TransformControls
           ref={controlsRef}
           object={object}
@@ -367,21 +509,27 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
             <div className="flex gap-2 flex-wrap">
               <button
                 className={`px-2 py-1 rounded ${mode === "translate" ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
-                onClick={() => setMode("translate")}
+                onClick={() => { setMode("translate"); setDrawMode(false); }}
               >
                 Move (G)
               </button>
               <button
                 className={`px-2 py-1 rounded ${mode === "rotate" ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
-                onClick={() => setMode("rotate")}
+                onClick={() => { setMode("rotate"); setDrawMode(false); }}
               >
                 Rotate (R)
               </button>
               <button
                 className={`px-2 py-1 rounded ${mode === "scale" ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
-                onClick={() => setMode("scale")}
+                onClick={() => { setMode("scale"); setDrawMode(false); }}
               >
                 Scale (S)
+              </button>
+              <button
+                className={`px-2 py-1 rounded ${mode === "draw" ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
+                onClick={() => { setMode("draw"); setDrawMode(true); }}
+              >
+                Draw (D)
               </button>
               <button
                 className={`px-2 py-1 rounded ${snap ? "bg-purple-600" : "bg-gray-600"} hover:bg-purple-500 transition`}
@@ -396,6 +544,44 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
                 Hide
               </button>
             </div>
+            {mode === "draw" && (
+              <div className="flex flex-col gap-2">
+                <div>
+                  <label>Type de tracé :</label>
+                  <select
+                    value={drawType}
+                    onChange={(e) => setDrawType(e.target.value)}
+                    className="ml-2 p-1 bg-gray-800 text-white rounded"
+                  >
+                    <option value="free">Ligne libre</option>
+                    <option value="straight">Ligne droite</option>
+                    <option value="circle">Cercle</option>
+                    <option value="square">Carré</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Couleur de la ligne :</label>
+                  <input
+                    type="color"
+                    value={lineColor}
+                    onChange={(e) => setLineColor(e.target.value)}
+                    className="ml-2"
+                  />
+                </div>
+                <div>
+                  <label>Épaisseur de la ligne :</label>
+                  <input
+                    type="number"
+                    value={lineWidth}
+                    onChange={(e) => setLineWidth(parseFloat(e.target.value))}
+                    min="1"
+                    max="10"
+                    step="1"
+                    className="ml-2 w-16 p-1 bg-gray-800 text-white rounded"
+                  />
+                </div>
+              </div>
+            )}
             <div className="flex gap-2 flex-wrap">
               <button
                 className="px-2 py-1 bg-gray-600 rounded hover:bg-purple-500 transition"
@@ -456,7 +642,7 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
                 Redo
               </button>
             </div>
-            {object && (
+            {object && mode !== "draw" && (
               <div className="flex flex-col gap-1">
                 <div>
                   <span>Position:</span>
@@ -573,6 +759,12 @@ function ModelCard({ file, material, textureURL, onClickPin, color, interiorColo
   const [localColor, setLocalColor] = useState(color);
   const [localInteriorColor, setLocalInteriorColor] = useState(interiorColor);
   const [selectedObject, setSelectedObject] = useState(null);
+  const [drawMode, setDrawMode] = useState(false);
+  const [drawType, setDrawType] = useState("free");
+  const [lineColor, setLineColor] = useState("#ff0000");
+  const [lineWidth, setLineWidth] = useState(2);
+  const [drawnLines, setDrawnLines] = useState([]);
+  const [isDrawingPanelVisible, setIsDrawingPanelVisible] = useState(true);
 
   useEffect(() => {
     function fullscreenChange() {
@@ -601,6 +793,10 @@ function ModelCard({ file, material, textureURL, onClickPin, color, interiorColo
     } else {
       document.exitFullscreen?.();
     }
+  };
+
+  const handleDraw = (line) => {
+    setDrawnLines((prev) => [...prev, line]);
   };
 
   return (
@@ -642,20 +838,8 @@ function ModelCard({ file, material, textureURL, onClickPin, color, interiorColo
       </button>
 
       {isFullscreen && (
-        <>
-          <label
-            style={{
-              position: "absolute",
-              top: 10,
-              left: 10,
-              zIndex: 10002,
-              color: "#fff",
-              fontSize: "12px",
-              display: "flex",
-              alignItems: "center",
-              gap: "5px",
-            }}
-          >
+        <div className="controls-container">
+          <label className="control-label">
             🎨 Couleur extérieure :
             <input
               type="color"
@@ -663,19 +847,7 @@ function ModelCard({ file, material, textureURL, onClickPin, color, interiorColo
               onChange={(e) => setLocalColor(e.target.value)}
             />
           </label>
-          <label
-            style={{
-              position: "absolute",
-              top: 40,
-              left: 10,
-              zIndex: 10002,
-              color: "#fff",
-              fontSize: "12px",
-              display: "flex",
-              alignItems: "center",
-              gap: "5px",
-            }}
-          >
+          <label className="control-label">
             🖌️ Couleur intérieure :
             <input
               type="color"
@@ -683,7 +855,14 @@ function ModelCard({ file, material, textureURL, onClickPin, color, interiorColo
               onChange={(e) => setLocalInteriorColor(e.target.value)}
             />
           </label>
-        </>
+          <button
+            className="control-button"
+            onClick={() => setIsDrawingPanelVisible(!isDrawingPanelVisible)}
+          >
+            {isDrawingPanelVisible ? "Masquer les tracés" : "Afficher les tracés"}
+          </button>
+          {isDrawingPanelVisible && <DrawingTools lines={drawnLines} />}
+        </div>
       )}
 
       <Canvas
@@ -699,7 +878,13 @@ function ModelCard({ file, material, textureURL, onClickPin, color, interiorColo
         <ambientLight intensity={0.5} />
         <directionalLight position={[5, 10, 5]} intensity={1} castShadow />
         <Environment preset="city" />
-        <OrbitControls ref={orbitControlsRef} enableZoom enablePan />
+        <OrbitControls
+          ref={orbitControlsRef}
+          enableZoom
+          enablePan
+          enableRotate={!drawMode}
+          enableDamping
+        />
         <Suspense fallback={<Loader />}>
           <LoadModel
             file={file}
@@ -709,28 +894,46 @@ function ModelCard({ file, material, textureURL, onClickPin, color, interiorColo
             color={localColor}
             interiorColor={localInteriorColor}
             setSelectedObject={setSelectedObject}
+            onDraw={handleDraw}
+            drawMode={drawMode}
+            drawType={drawType}
+            lineColor={lineColor}
+            lineWidth={lineWidth}
           />
           <TransformControlsComponent
             object={selectedObject}
             isFullscreen={isFullscreen}
             orbitControlsRef={orbitControlsRef}
+            setDrawMode={setDrawMode}
+            drawType={drawType}
+            setDrawType={setDrawType}
+            lineColor={lineColor}
+            setLineColor={setLineColor}
+            lineWidth={lineWidth}
+            setLineWidth={setLineWidth}
           />
         </Suspense>
       </Canvas>
 
       {!isFullscreen && (
-        <>
-          <p className="filename" style={{ marginTop: 8 }}>{file.name}</p>
-          <label style={{ fontSize: 12 }}>
+        <div className="controls-container">
+          <p className="filename">{file.name}</p>
+          <label className="control-label">
             Fond carte :
             <input
               type="color"
               value={bgColor}
               onChange={(e) => setBgColor(e.target.value)}
-              style={{ marginLeft: 5 }}
             />
           </label>
-        </>
+          <button
+            className="control-button"
+            onClick={() => setIsDrawingPanelVisible(!isDrawingPanelVisible)}
+          >
+            {isDrawingPanelVisible ? "Masquer les tracés" : "Afficher les tracés"}
+          </button>
+          {isDrawingPanelVisible && <DrawingTools lines={drawnLines} />}
+        </div>
       )}
     </div>
   );
@@ -741,7 +944,7 @@ export default function App() {
   const inputRef = useRef();
   const [files, setFiles] = useState([]);
   const [color, setColor] = useState("#aaaaaa");
-  const [interiorColor, setInteriorColor] = useState("#ffffff"); // Nouvelle couleur intérieure
+  const [interiorColor, setInteriorColor] = useState("#ffffff");
   const [darkMode, setDarkMode] = useState(false);
   const [textureURL, setTextureURL] = useState("");
   const [pins, setPins] = useState({});
@@ -847,4 +1050,4 @@ export default function App() {
       </div>
     </div>
   );
-} 
+}
