@@ -11,6 +11,7 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader";
 import * as THREE from "three";
+import * as tf from "@tensorflow/tfjs"; // Importation de TensorFlow.js
 import "./App.css";
 
 // Textures prédéfinies
@@ -31,9 +32,31 @@ function Loader() {
   );
 }
 
-// Composant pour charger et afficher un modèle 3D
+// Fonction pour créer un modèle d'autoencodeur simple
+async function createAutoencoder(inputDim) {
+  const model = tf.sequential();
+  model.add(tf.layers.dense({ units: 32, activation: "relu", inputShape: [inputDim] }));
+  model.add(tf.layers.dense({ units: 16, activation: "relu" }));
+  model.add(tf.layers.dense({ units: 32, activation: "relu" }));
+  model.add(tf.layers.dense({ units: inputDim, activation: "linear" }));
+  model.compile({ optimizer: "adam", loss: "meanSquaredError" });
+  return model;
+}
+
+// Composant pour charger et afficher un modèle 3D avec détection d'anomalies
 function LoadModel({ file, material, textureURL, onClickPin, color, interiorColor, setSelectedObject }) {
   const [object, setObject] = useState(null);
+  const [anomalies, setAnomalies] = useState([]);
+  const [anomalyModel, setAnomalyModel] = useState(null);
+
+  useEffect(() => {
+    // Initialiser le modèle d'autoencodeur
+    async function initializeModel() {
+      const model = await createAutoencoder(3); // 3 pour x, y, z
+      setAnomalyModel(model);
+    }
+    initializeModel();
+  }, []);
 
   useEffect(() => {
     const ext = file.name.split(".").pop().toLowerCase();
@@ -51,14 +74,17 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
 
     const interiorMaterial = new THREE.MeshStandardMaterial({
       color: interiorColor,
-      side: THREE.BackSide, // Rendu des faces internes
+      side: THREE.BackSide,
     });
 
-    reader.onload = () => {
+    reader.onload = async () => {
+      let vertices = [];
+      let resultObject;
+
       if (ext === "obj") {
         const loader = new OBJLoader();
-        const result = loader.parse(reader.result);
-        result.traverse((child) => {
+        resultObject = loader.parse(reader.result);
+        resultObject.traverse((child) => {
           if (child instanceof THREE.Mesh) {
             const group = new THREE.Group();
             const exteriorMesh = child.clone();
@@ -70,11 +96,19 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
             group.add(exteriorMesh);
             group.add(interiorMesh);
 
+            // Extraire les sommets pour la détection d'anomalies
+            const positionAttribute = child.geometry.attributes.position;
+            for (let i = 0; i < positionAttribute.count; i++) {
+              const vertex = new THREE.Vector3();
+              vertex.fromBufferAttribute(positionAttribute, i);
+              vertices.push([vertex.x, vertex.y, vertex.z]);
+            }
+
             child.parent?.add(group);
             child.parent?.remove(child);
           }
         });
-        setObject(result);
+        setObject(resultObject);
       } else if (ext === "glb" || ext === "gltf") {
         const loader = new GLTFLoader();
         loader.parse(reader.result, "", (gltf) => {
@@ -90,6 +124,14 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
               group.add(exteriorMesh);
               group.add(interiorMesh);
 
+              // Extraire les sommets pour la détection d'anomalies
+              const positionAttribute = child.geometry.attributes.position;
+              for (let i = 0; i < positionAttribute.count; i++) {
+                const vertex = new THREE.Vector3();
+                vertex.fromBufferAttribute(positionAttribute, i);
+                vertices.push([vertex.x, vertex.y, vertex.z]);
+              }
+
               child.parent?.add(group);
               child.parent?.remove(child);
             }
@@ -102,6 +144,14 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
         geometry.computeVertexNormals();
         const pointsMaterial = new THREE.PointsMaterial({ size: 0.01, color });
         const points = new THREE.Points(geometry, pointsMaterial);
+
+        // Extraire les points pour la détection d'anomalies
+        const positionAttribute = geometry.attributes.position;
+        for (let i = 0; i < positionAttribute.count; i++) {
+          const vertex = new THREE.Vector3();
+          vertex.fromBufferAttribute(positionAttribute, i);
+          vertices.push([vertex.x, vertex.y, vertex.z]);
+        }
         setObject(points);
       } else if (ext === "las") {
         const buffer = reader.result;
@@ -127,6 +177,7 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
           const y = view.getInt32(base + 4, true) * scaleY + offsetY;
           const z = view.getInt32(base + 8, true) * scaleZ + offsetZ;
           positions.push(x, y, z);
+          vertices.push([x, y, z]);
 
           const r = view.getUint16(base + 20, true) / 256;
           const g = view.getUint16(base + 22, true) / 256;
@@ -143,6 +194,33 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
         setObject(points);
       } else {
         alert("Format non supporté : " + ext);
+        return;
+      }
+
+      // Détection d'anomalies avec TensorFlow.js
+      if (anomalyModel && vertices.length > 0) {
+        const inputTensor = tf.tensor2d(vertices);
+        const reconstructed = anomalyModel.predict(inputTensor);
+        const mse = tf.losses.meanSquaredError(inputTensor, reconstructed).dataSync();
+        const threshold = 0.1; // Seuil pour considérer un point comme anomalie (à ajuster)
+        const anomalyIndices = [];
+
+        for (let i = 0; i < mse.length; i++) {
+          if (mse[i] > threshold) {
+            anomalyIndices.push(i);
+          }
+        }
+
+        // Créer des marqueurs pour les anomalies
+        const anomalyPositions = anomalyIndices.map((index) => ({
+          x: vertices[index][0],
+          y: vertices[index][1],
+          z: vertices[index][2],
+        }));
+        setAnomalies(anomalyPositions);
+
+        inputTensor.dispose();
+        reconstructed.dispose();
       }
     };
 
@@ -151,7 +229,7 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
     } else {
       reader.readAsArrayBuffer(file);
     }
-  }, [file, material, textureURL, color, interiorColor]);
+  }, [file, material, textureURL, color, interiorColor, anomalyModel]);
 
   function handleClick(event) {
     event.stopPropagation();
@@ -161,12 +239,21 @@ function LoadModel({ file, material, textureURL, onClickPin, color, interiorColo
   }
 
   return object ? (
-    <primitive
-      object={object}
-      scale={1.5}
-      onClick={handleClick}
-      dispose={null}
-    />
+    <group>
+      <primitive
+        object={object}
+        scale={1.5}
+        onClick={handleClick}
+        dispose={null}
+      />
+      {/* Ajouter des marqueurs pour les anomalies */}
+      {anomalies.map((pos, index) => (
+        <mesh key={index} position={[pos.x, pos.y, pos.z]}>
+          <sphereGeometry args={[0.05, 16, 16]} />
+          <meshStandardMaterial color="red" />
+        </mesh>
+      ))}
+    </group>
   ) : null;
 }
 
@@ -265,7 +352,6 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
     setIsDragging(false);
   };
 
-  // Contrôles de la caméra
   const rotateLeft = () => {
     if (orbitControlsRef.current) {
       orbitControlsRef.current.object.rotateY(THREE.MathUtils.degToRad(15));
@@ -741,7 +827,7 @@ export default function App() {
   const inputRef = useRef();
   const [files, setFiles] = useState([]);
   const [color, setColor] = useState("#aaaaaa");
-  const [interiorColor, setInteriorColor] = useState("#ffffff"); // Nouvelle couleur intérieure
+  const [interiorColor, setInteriorColor] = useState("#ffffff");
   const [darkMode, setDarkMode] = useState(false);
   const [textureURL, setTextureURL] = useState("");
   const [pins, setPins] = useState({});
