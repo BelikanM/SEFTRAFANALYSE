@@ -11,3 +11,87 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+.app-container {
+  padding: 1rem;
+  background-color: #f0f0f0;
+}
+
+.app-container.dark {
+  background-color: #1a1a1a;
+}
+
+.toolbar {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.grid-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.model-card {
+  border: 1px solid #ccc;
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+.loader {
+  color: white;
+  font-size: 16px;
+  background: rgba(0, 0, 0, 0.8);
+  padding: 10px;
+  borderRadius: 8px;
+}
+
+.filename {
+  text-align: center;
+  font-size: 14px;
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .grid-container {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+
+  .model-card {
+    height: 250px;
+  }
+
+  .filename {
+    font-size: 12px;
+  }
+}
+
+.control-panel {
+  pointer-events: auto;
+}
+
+.control-panel button {
+  pointer-events: auto;
+}
+
+.control-panel input {
+  pointer-events: auto;
+}
+
+/* Ajustements pour le menu déroulant de Bootstrap */
+.dropdown-menu {
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.dropdown-item {
+  color: white;
+}
+
+.dropdown-item:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}

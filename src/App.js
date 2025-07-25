@@ -32,7 +32,7 @@ function Loader() {
 }
 
 // Composant pour charger et afficher un modèle 3D
-function LoadModel({ file, material, textureURL, onClickPin, color, setSelectedObject }) {
+function LoadModel({ file, material, textureURL, onClickPin, color, interiorColor, setSelectedObject }) {
   const [object, setObject] = useState(null);
 
   useEffect(() => {
@@ -45,15 +45,33 @@ function LoadModel({ file, material, textureURL, onClickPin, color, setSelectedO
       texture = loader.load(textureURL);
     }
 
+    const exteriorMaterial = texture
+      ? new THREE.MeshStandardMaterial({ map: texture })
+      : new THREE.MeshStandardMaterial({ color });
+
+    const interiorMaterial = new THREE.MeshStandardMaterial({
+      color: interiorColor,
+      side: THREE.BackSide, // Rendu des faces internes
+    });
+
     reader.onload = () => {
       if (ext === "obj") {
         const loader = new OBJLoader();
         const result = loader.parse(reader.result);
         result.traverse((child) => {
           if (child instanceof THREE.Mesh) {
-            child.material = texture
-              ? new THREE.MeshStandardMaterial({ map: texture })
-              : new THREE.MeshStandardMaterial({ color });
+            const group = new THREE.Group();
+            const exteriorMesh = child.clone();
+            const interiorMesh = child.clone();
+
+            exteriorMesh.material = exteriorMaterial;
+            interiorMesh.material = interiorMaterial;
+
+            group.add(exteriorMesh);
+            group.add(interiorMesh);
+
+            child.parent?.add(group);
+            child.parent?.remove(child);
           }
         });
         setObject(result);
@@ -62,9 +80,18 @@ function LoadModel({ file, material, textureURL, onClickPin, color, setSelectedO
         loader.parse(reader.result, "", (gltf) => {
           gltf.scene.traverse((child) => {
             if (child instanceof THREE.Mesh) {
-              child.material = texture
-                ? new THREE.MeshStandardMaterial({ map: texture })
-                : new THREE.MeshStandardMaterial({ color });
+              const group = new THREE.Group();
+              const exteriorMesh = child.clone();
+              const interiorMesh = child.clone();
+
+              exteriorMesh.material = exteriorMaterial;
+              interiorMesh.material = interiorMaterial;
+
+              group.add(exteriorMesh);
+              group.add(interiorMesh);
+
+              child.parent?.add(group);
+              child.parent?.remove(child);
             }
           });
           setObject(gltf.scene);
@@ -124,7 +151,7 @@ function LoadModel({ file, material, textureURL, onClickPin, color, setSelectedO
     } else {
       reader.readAsArrayBuffer(file);
     }
-  }, [file, material, textureURL, color]);
+  }, [file, material, textureURL, color, interiorColor]);
 
   function handleClick(event) {
     event.stopPropagation();
@@ -538,12 +565,13 @@ function TransformControlsComponent({ object, isFullscreen, orbitControlsRef }) 
 }
 
 // Composant pour afficher une carte de modèle
-function ModelCard({ file, material, textureURL, onClickPin, color }) {
+function ModelCard({ file, material, textureURL, onClickPin, color, interiorColor }) {
   const containerRef = useRef(null);
   const orbitControlsRef = useRef();
   const [bgColor, setBgColor] = useState("#222");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [localColor, setLocalColor] = useState(color);
+  const [localInteriorColor, setLocalInteriorColor] = useState(interiorColor);
   const [selectedObject, setSelectedObject] = useState(null);
 
   useEffect(() => {
@@ -614,26 +642,48 @@ function ModelCard({ file, material, textureURL, onClickPin, color }) {
       </button>
 
       {isFullscreen && (
-        <label
-          style={{
-            position: "absolute",
-            top: 10,
-            left: 10,
-            zIndex: 10002,
-            color: "#fff",
-            fontSize: "12px",
-            display: "flex",
-            alignItems: "center",
-            gap: "5px",
-          }}
-        >
-          🎨 Couleur de l’objet :
-          <input
-            type="color"
-            value={localColor}
-            onChange={(e) => setLocalColor(e.target.value)}
-          />
-        </label>
+        <>
+          <label
+            style={{
+              position: "absolute",
+              top: 10,
+              left: 10,
+              zIndex: 10002,
+              color: "#fff",
+              fontSize: "12px",
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+            }}
+          >
+            🎨 Couleur extérieure :
+            <input
+              type="color"
+              value={localColor}
+              onChange={(e) => setLocalColor(e.target.value)}
+            />
+          </label>
+          <label
+            style={{
+              position: "absolute",
+              top: 40,
+              left: 10,
+              zIndex: 10002,
+              color: "#fff",
+              fontSize: "12px",
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+            }}
+          >
+            🖌️ Couleur intérieure :
+            <input
+              type="color"
+              value={localInteriorColor}
+              onChange={(e) => setLocalInteriorColor(e.target.value)}
+            />
+          </label>
+        </>
       )}
 
       <Canvas
@@ -643,7 +693,7 @@ function ModelCard({ file, material, textureURL, onClickPin, color }) {
           borderRadius: "1rem",
           flexGrow: 1,
           backgroundColor: bgColor,
-          marginTop: isFullscreen ? "2.5rem" : 0,
+          marginTop: isFullscreen ? "4rem" : 0,
         }}
       >
         <ambientLight intensity={0.5} />
@@ -657,6 +707,7 @@ function ModelCard({ file, material, textureURL, onClickPin, color }) {
             textureURL={textureURL}
             onClickPin={onClickPin}
             color={localColor}
+            interiorColor={localInteriorColor}
             setSelectedObject={setSelectedObject}
           />
           <TransformControlsComponent
@@ -690,6 +741,7 @@ export default function App() {
   const inputRef = useRef();
   const [files, setFiles] = useState([]);
   const [color, setColor] = useState("#aaaaaa");
+  const [interiorColor, setInteriorColor] = useState("#ffffff"); // Nouvelle couleur intérieure
   const [darkMode, setDarkMode] = useState(false);
   const [textureURL, setTextureURL] = useState("");
   const [pins, setPins] = useState({});
@@ -715,11 +767,20 @@ export default function App() {
           📦 Importer jusqu’à 10 fichiers 3D
         </button>
         <label>
-          🎨 Couleur :
+          🎨 Couleur extérieure :
           <input
             type="color"
             value={color}
             onChange={(e) => setColor(e.target.value)}
+            style={{ marginLeft: "0.5rem" }}
+          />
+        </label>
+        <label>
+          🖌️ Couleur intérieure :
+          <input
+            type="color"
+            value={interiorColor}
+            onChange={(e) => setInteriorColor(e.target.value)}
             style={{ marginLeft: "0.5rem" }}
           />
         </label>
@@ -776,6 +837,7 @@ export default function App() {
               textureURL={textureURL}
               onClickPin={addPin}
               color={color}
+              interiorColor={interiorColor}
             />
             <div style={{ fontSize: 12, marginTop: 4 }}>
               Pins sur {file.name} : {pins[file.name]?.length || 0}
